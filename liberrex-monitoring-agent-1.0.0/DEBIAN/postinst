@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+# Create a virtual environment
+python3 -m venv /opt/monitoring-agent/venv
+
+# Activate virtual environment and install Python packages
+/opt/monitoring-agent/venv/bin/pip install psutil requests influxdb-client uuid
+
+# Generate or read agent-id
+AGENT_ID_FILE="/opt/monitoring-agent/agent-id"
+if [ -f "$AGENT_ID_FILE" ]; then
+    AGENT_ID=$(cat "$AGENT_ID_FILE")
+    echo "Using existing agent-id: $AGENT_ID"
+else
+    # Generate a new UUID
+    AGENT_ID=$(python3 -c 'import uuid; print(str(uuid.uuid4()))')
+    echo "$AGENT_ID" > "$AGENT_ID_FILE"
+    echo "Generated new agent-id: $AGENT_ID"
+fi
+
+# Configure rsyslog with the agent ID
+if grep -q "^\$LocalHostName" /etc/rsyslog.conf; then
+    sed -i '/^\$LocalHostName/d' /etc/rsyslog.conf
+fi
+echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
+
+# Add remote logging configuration if not already present
+if ! grep -q "^\*\.\*  @@82\.165\.230\.7:29514" /etc/rsyslog.conf; then
+    echo "*.*  @@82.165.230.7:29514" >> /etc/rsyslog.conf
+fi
+
+# Modify Apache logging format if Apache is installed
+if [ -f "/etc/apache2/apache2.conf" ]; then
+    # Update vhost_combined format
+    if grep -q 'LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined' /etc/apache2/apache2.conf; then
+        sed -i 's/LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined/LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined/' /etc/apache2/apache2.conf
+    fi
+    
+    # Update combined format
+    if grep -q 'LogFormat "%h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined' /etc/apache2/apache2.conf; then
+        sed -i 's/LogFormat "%h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined/LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined/' /etc/apache2/apache2.conf
+    fi
+    
+    # Update common format
+    if grep -q 'LogFormat "%h %l %u %t \\"%r\\" %>s %O" common' /etc/apache2/apache2.conf; then
+        sed -i 's/LogFormat "%h %l %u %t \\"%r\\" %>s %O" common/LogFormat "%h %l %u %t \\"%r\\" %>s %O %D" common/' /etc/apache2/apache2.conf
+    fi
+    
+    # Restart Apache if installed
+    if command -v apache2ctl >/dev/null 2>&1; then
+        systemctl restart apache2 || true
+    fi
+fi
+
+# Restart rsyslog service
+systemctl restart rsyslog || true
+
+# Enable and start monitoring agent
+systemctl daemon-reload
+systemctl enable monitoring-agent
+systemctl start monitoring-agent
+
+exit 0

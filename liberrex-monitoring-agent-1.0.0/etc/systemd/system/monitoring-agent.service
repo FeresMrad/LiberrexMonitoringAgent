@@ -1,0 +1,11 @@
+[Unit]
+Description=System Monitoring Agent
+After=network.target
+
+[Service]
+ExecStart=/opt/monitoring-agent/venv/bin/python /opt/monitoring-agent/agent.py
+WorkingDirectory=/opt/monitoring-agent
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
