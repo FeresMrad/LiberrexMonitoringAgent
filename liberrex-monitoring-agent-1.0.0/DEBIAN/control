@@ -3,7 +3,6 @@ Version: 1.0.0
 Section: admin
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.6), python3-pip, python3-venv, python3-dev, build-essential, rsyslog
 Maintainer: Feres Mrad <mohamed.feres.mrad@liberrex.com>
 Description: Liberrex Monitoring Agent
  System and service monitoring agent that collects
