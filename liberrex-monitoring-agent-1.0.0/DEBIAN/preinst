@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+
+# Check if dependencies are installed, install them if needed
+echo "Checking dependencies..."
+DEPENDENCIES=("python3-pip" "python3-venv" "python3-dev" "build-essential" "rsyslog")
+MISSING=()
+
+for dep in "${DEPENDENCIES[@]}"; do
+  if ! dpkg -s "$dep" >/dev/null 2>&1; then
+    MISSING+=("$dep")
+  fi
+done
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "Installing missing dependencies: ${MISSING[*]}"
+  apt-get update
+  apt-get -y install "${MISSING[@]}"
+fi
+
+exit 0
