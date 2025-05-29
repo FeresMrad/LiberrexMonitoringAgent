@@ -89,34 +89,37 @@ fi
 echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
 echo "Added LocalHostName configuration to rsyslog"
 
-# Create SSH-specific rsyslog configuration
-echo "# Setting up SSH logging configuration"
-cat > /etc/rsyslog.d/ssh-monitoring.conf << EOL
-###############################################################################
-# SSH Monitoring Configuration
-# Forwards only SSH authentication events
-###############################################################################
+# Remove old separate configuration files if they exist
+if [ -f "/etc/rsyslog.d/ssh-monitoring.conf" ]; then
+    rm /etc/rsyslog.d/ssh-monitoring.conf
+    echo "Removed old ssh-monitoring.conf file"
+fi
 
+if [ -f "/etc/rsyslog.d/apache-monitoring.conf" ]; then
+    rm /etc/rsyslog.d/apache-monitoring.conf
+    echo "Removed old apache-monitoring.conf file"
+fi
+
+# Create unified monitoring rsyslog configuration
+echo "# Setting up unified monitoring configuration"
+cat > /etc/rsyslog.d/monitoring.conf << EOL
+###############################################################################
+# Liberrex Monitoring Configuration
+# Handles SSH authentication events and Apache access logs
+###############################################################################
+# Load imfile module for file monitoring
+module(load="imfile" PollingInterval="10")
+###############################################################################
+# SSH Authentication Monitoring
+###############################################################################
 # Forward SSH daemon logs (authentication events)
 if (\$programname == 'sshd') then {
     @@82.165.230.7:29514
     stop
 }
-EOL
-
-echo "Created SSH monitoring rsyslog configuration"
-
-# Create Apache-specific rsyslog configuration  
-echo "# Setting up Apache logging configuration"
-cat > /etc/rsyslog.d/apache-monitoring.conf << EOL
 ###############################################################################
-# Apache Monitoring Configuration  
-# Monitors Apache access logs and forwards selectively
+# Apache Access Log Monitoring
 ###############################################################################
-
-# Load imfile module for file monitoring
-module(load="imfile" PollingInterval="10")
-
 # Monitor Apache's main access log
 input(type="imfile"
       File="/var/log/apache2/access.log"
@@ -125,7 +128,6 @@ input(type="imfile"
       Severity="info"
       PersistStateInterval="200"
 )
-
 # Filter out monitoring and internal requests
 if (\$programname == 'apache-access' and (
     (\$msg contains '127.0.0.1' and \$msg contains 'GET /server-status?auto') or
@@ -135,13 +137,11 @@ if (\$programname == 'apache-access' and (
 )) then {
     stop
 }
-
 # Forward Apache access logs and stop local processing
 if (\$programname == 'apache-access') then {
     @@82.165.230.7:29514
     stop
 }
-
 ###############################################################################
 # Error handling and queue configuration
 ###############################################################################
@@ -149,14 +149,13 @@ if (\$programname == 'apache-access') then {
 \$ActionResumeRetryCount 3
 \$ActionQueueMaxDiskSpace 50M
 \$ActionQueueType LinkedList
-\$ActionQueueFileName apache_queue
+\$ActionQueueFileName monitoring_queue
 \$ActionQueueSaveOnShutdown on
-
 # Drop messages if remote server is unreachable for too long
 \$ActionExecOnlyWhenPreviousIsSuspended on
 EOL
 
-echo "Created Apache monitoring rsyslog configuration"
+echo "Created unified monitoring rsyslog configuration"
 
 # Modify Apache logging format to include response time (%D) if Apache is installed
 if [ -f "/etc/apache2/apache2.conf" ]; then
@@ -230,6 +229,7 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- Server-status requests filtered out"
     echo "- All logs forwarded to 82.165.230.7:29514 without local storage"
     echo "- Queue size limited to 50MB to prevent disk issues"
+    echo "- Using unified monitoring.conf configuration file"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1
