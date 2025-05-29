@@ -64,60 +64,105 @@ Restart=always
 WantedBy=multi-user.target
 EOL
 
-# Add configuration to rsyslog if not already present
-echo "# Checking and configuring rsyslog for remote logging"
+# Configure rsyslog with proper settings to prevent storage issues
+echo "# Configuring rsyslog for monitoring agent"
 
-# Remove any existing LocalHostName lines
+# Remove any existing LocalHostName lines and forwarding rules
 if grep -q "^\$LocalHostName" /etc/rsyslog.conf; then
-    # Use sed to remove any existing LocalHostName lines
     sed -i '/^\$LocalHostName/d' /etc/rsyslog.conf
     echo "Removed existing LocalHostName configuration"
 fi
 
-# Now add the new LocalHostName line
+# Remove any existing forwarding rules to prevent duplicates
+if grep -q "@@82\.165\.230\.7:29514" /etc/rsyslog.conf; then
+    sed -i '/@@82\.165\.230\.7:29514/d' /etc/rsyslog.conf
+    echo "Removed existing forwarding configuration"
+fi
+
+# Remove any wildcard forwarding rules that send all logs
+if grep -q "^\*\.\*" /etc/rsyslog.conf; then
+    sed -i '/^\*\.\*/d' /etc/rsyslog.conf
+    echo "Removed wildcard forwarding configuration"
+fi
+
+# Add LocalHostName configuration
 echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
 echo "Added LocalHostName configuration to rsyslog"
 
-# Check if forwarding rule exists
-if ! grep -q "^\*\.\*  @@82\.165\.230\.7:29514" /etc/rsyslog.conf; then
-    echo "*.*  @@82.165.230.7:29514" >> /etc/rsyslog.conf
-    echo "Added remote logging configuration to rsyslog"
-else
-    echo "Remote logging already configured in rsyslog"
-fi
+# Create SSH-specific rsyslog configuration
+echo "# Setting up SSH logging configuration"
+cat > /etc/rsyslog.d/ssh-monitoring.conf << EOL
+###############################################################################
+# SSH Monitoring Configuration
+# Forwards only SSH authentication events
+###############################################################################
 
-# Create Apache logging configuration for rsyslog
-echo "# Setting up Apache access log monitoring with rsyslog"
-cat > /etc/rsyslog.d/apache.conf << EOL
+# Forward SSH daemon logs (authentication events)
+if (\$programname == 'sshd') then {
+    @@82.165.230.7:29514
+    stop
+}
+EOL
+
+echo "Created SSH monitoring rsyslog configuration"
+
+# Create Apache-specific rsyslog configuration  
+echo "# Setting up Apache logging configuration"
+cat > /etc/rsyslog.d/apache-monitoring.conf << EOL
 ###############################################################################
-# 1) Load the imfile module
+# Apache Monitoring Configuration  
+# Monitors Apache access logs and forwards selectively
 ###############################################################################
+
+# Load imfile module for file monitoring
 module(load="imfile" PollingInterval="10")
-###############################################################################
-# 2) Watch Apache's access.log
-###############################################################################
+
+# Monitor Apache's main access log
 input(type="imfile"
-      File="/var/log/apache2/*access.log"    # the file to tail
-      Tag="apache-access:"                   # prefix you'll see in \$programname
-      Facility="local6"                      # keep it separate
+      File="/var/log/apache2/access.log"
+      Tag="apache-access:"
+      Facility="local2"
       Severity="info"
       PersistStateInterval="200"
 )
-# Filter out server-status requests from 127.0.0.1
-if (\$programname == 'apache-access' and
-    \$msg contains '127.0.0.1' and
-    \$msg contains 'GET /server-status?auto') then {
-    stop  # drop the message, don't log or forward it
+
+# Filter out monitoring and internal requests
+if (\$programname == 'apache-access' and (
+    (\$msg contains '127.0.0.1' and \$msg contains 'GET /server-status?auto') or
+    (\$msg contains '"OPTIONS * HTTP/1.0"' and \$msg contains 'internal dummy connection') or
+    (\$msg contains '::1' and \$msg contains '"OPTIONS * HTTP/1.0"') or
+    (\$msg contains '127.0.0.1' and \$msg contains '"OPTIONS * HTTP/1.0"')
+)) then {
+    stop
 }
+
+# Forward Apache access logs and stop local processing
+if (\$programname == 'apache-access') then {
+    @@82.165.230.7:29514
+    stop
+}
+
+###############################################################################
+# Error handling and queue configuration
+###############################################################################
+# Prevent infinite retries and disk space issues
+\$ActionResumeRetryCount 3
+\$ActionQueueMaxDiskSpace 50M
+\$ActionQueueType LinkedList
+\$ActionQueueFileName apache_queue
+\$ActionQueueSaveOnShutdown on
+
+# Drop messages if remote server is unreachable for too long
+\$ActionExecOnlyWhenPreviousIsSuspended on
 EOL
-echo "Created Apache rsyslog configuration file"
+
+echo "Created Apache monitoring rsyslog configuration"
 
 # Modify Apache logging format to include response time (%D) if Apache is installed
 if [ -f "/etc/apache2/apache2.conf" ]; then
     echo "# Modifying Apache logging format to include response time (%D)"
     
     # Check if LogFormat lines already include %D
-    # If not, update them
     APACHE_MODIFIED=0
     
     # Update vhost_combined format
@@ -149,9 +194,21 @@ else
     echo "Apache configuration not found, skipping LogFormat modifications"
 fi
 
+# Test rsyslog configuration before applying
+rsyslogd -N1 -f /etc/rsyslog.conf
+if [ $? -ne 0 ]; then
+    echo "ERROR: Invalid rsyslog configuration. Please check the config files."
+    exit 1
+fi
+
 # Restart rsyslog service to apply all changes
 systemctl restart rsyslog
-echo "Rsyslog configured and restarted"
+if [ $? -eq 0 ]; then
+    echo "Rsyslog configured and restarted successfully"
+else
+    echo "ERROR: Failed to restart rsyslog. Check configuration."
+    exit 1
+fi
 
 # Reload systemd to recognize the new service
 systemctl daemon-reload
@@ -162,4 +219,18 @@ systemctl enable monitoring-agent
 # Start the service
 systemctl start monitoring-agent
 
-echo "Monitoring agent installed and started successfully with agent ID: $AGENT_ID"
+# Verify service started successfully
+sleep 2
+if systemctl is-active --quiet monitoring-agent; then
+    echo "Monitoring agent installed and started successfully with agent ID: $AGENT_ID"
+    echo ""
+    echo "Monitoring configuration summary:"
+    echo "- SSH authentication events from /var/log/auth.log"
+    echo "- Apache access logs from /var/log/apache2/access.log"
+    echo "- Server-status requests filtered out"
+    echo "- All logs forwarded to 82.165.230.7:29514 without local storage"
+    echo "- Queue size limited to 50MB to prevent disk issues"
+else
+    echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
+    exit 1
+fi
