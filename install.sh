@@ -64,149 +64,85 @@ Restart=always
 WantedBy=multi-user.target
 EOL
 
-# Configure rsyslog with proper settings to prevent storage issues
-echo "# Configuring rsyslog for monitoring agent"
-
-# Remove any existing LocalHostName lines and forwarding rules
-if grep -q "^\$LocalHostName" /etc/rsyslog.conf; then
-    sed -i '/^\$LocalHostName/d' /etc/rsyslog.conf
-    echo "Removed existing LocalHostName configuration"
-fi
-
-# Remove any existing forwarding rules to prevent duplicates
-if grep -q "@@82\.165\.230\.7:29514" /etc/rsyslog.conf; then
-    sed -i '/@@82\.165\.230\.7:29514/d' /etc/rsyslog.conf
-    echo "Removed existing forwarding configuration"
-fi
-
-# Remove any wildcard forwarding rules that send all logs
-if grep -q "^\*\.\*" /etc/rsyslog.conf; then
-    sed -i '/^\*\.\*/d' /etc/rsyslog.conf
-    echo "Removed wildcard forwarding configuration"
-fi
-
-# Add LocalHostName configuration
-echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
-echo "Added LocalHostName configuration to rsyslog"
-
-# Remove old separate configuration files if they exist
-if [ -f "/etc/rsyslog.d/ssh-monitoring.conf" ]; then
-    rm /etc/rsyslog.d/ssh-monitoring.conf
-    echo "Removed old ssh-monitoring.conf file"
-fi
-
-if [ -f "/etc/rsyslog.d/apache-monitoring.conf" ]; then
-    rm /etc/rsyslog.d/apache-monitoring.conf
-    echo "Removed old apache-monitoring.conf file"
-fi
-
-# Create unified monitoring rsyslog configuration
-echo "# Setting up unified monitoring configuration"
-cat > /etc/rsyslog.d/monitoring.conf << EOL
-###############################################################################
-# Liberrex Monitoring Configuration
-# Handles SSH authentication events and Apache access logs
-###############################################################################
-# Load imfile module for file monitoring
-module(load="imfile" PollingInterval="10")
-###############################################################################
-# SSH Authentication Monitoring
-###############################################################################
-# Forward SSH daemon logs (authentication events)
-if (\$programname == 'sshd') then {
-    @@82.165.230.7:29514
-    stop
-}
-###############################################################################
-# Apache Access Log Monitoring
-###############################################################################
-# Monitor Apache's main access log
-input(type="imfile"
-      File="/var/log/apache2/access.log"
-      Tag="apache-access:"
-      Facility="local2"
-      Severity="info"
-      PersistStateInterval="200"
-)
-# Filter out monitoring and internal requests
-if (\$programname == 'apache-access' and (
-    (\$msg contains '127.0.0.1' and \$msg contains 'GET /server-status?auto') or
-    (\$msg contains '"OPTIONS * HTTP/1.0"' and \$msg contains 'internal dummy connection') or
-    (\$msg contains '::1' and \$msg contains '"OPTIONS * HTTP/1.0"') or
-    (\$msg contains '127.0.0.1' and \$msg contains '"OPTIONS * HTTP/1.0"')
-)) then {
-    stop
-}
-# Forward Apache access logs and stop local processing
-if (\$programname == 'apache-access') then {
-    @@82.165.230.7:29514
-    stop
-}
-###############################################################################
-# Error handling and queue configuration
-###############################################################################
-# Prevent infinite retries and disk space issues
-\$ActionResumeRetryCount 3
-\$ActionQueueMaxDiskSpace 50M
-\$ActionQueueType LinkedList
-\$ActionQueueFileName monitoring_queue
-\$ActionQueueSaveOnShutdown on
-# Drop messages if remote server is unreachable for too long
-\$ActionExecOnlyWhenPreviousIsSuspended on
-EOL
-
-echo "Created unified monitoring rsyslog configuration"
-
-# Modify Apache logging format to include response time (%D) if Apache is installed
-if [ -f "/etc/apache2/apache2.conf" ]; then
-    echo "# Modifying Apache logging format to include response time (%D)"
+# Configure Apache FIRST (before rsyslog) since rsyslog will forward the modified logs
+APACHE_SCRIPT="./configure_apache.sh"
+if [ -f "$APACHE_SCRIPT" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "CONFIGURING APACHE (Step 1/3)"
+    echo "================================================================================"
     
-    # Check if LogFormat lines already include %D
-    APACHE_MODIFIED=0
+    # Make sure the script is executable
+    chmod +x "$APACHE_SCRIPT"
     
-    # Update vhost_combined format
-    if grep -q 'LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined' /etc/apache2/apache2.conf; then
-        sed -i 's/LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined/LogFormat "%v:%p %h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" vhost_combined/' /etc/apache2/apache2.conf
-        APACHE_MODIFIED=1
-    fi
-    
-    # Update combined format
-    if grep -q 'LogFormat "%h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined' /etc/apache2/apache2.conf; then
-        sed -i 's/LogFormat "%h %l %u %t \\"%r\\" %>s %O \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined/LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined/' /etc/apache2/apache2.conf
-        APACHE_MODIFIED=1
-    fi
-    
-    # Update common format
-    if grep -q 'LogFormat "%h %l %u %t \\"%r\\" %>s %O" common' /etc/apache2/apache2.conf; then
-        sed -i 's/LogFormat "%h %l %u %t \\"%r\\" %>s %O" common/LogFormat "%h %l %u %t \\"%r\\" %>s %O %D" common/' /etc/apache2/apache2.conf
-        APACHE_MODIFIED=1
-    fi
-    
-    # Restart Apache if modified
-    if [ $APACHE_MODIFIED -eq 1 ]; then
-        echo "Apache logging formats updated, restarting Apache service"
-        systemctl restart apache2
+    # Run the Apache configuration script
+    if bash "$APACHE_SCRIPT"; then
+        echo "✓ Apache configuration completed successfully"
+        APACHE_STATUS="configured"
     else
-        echo "Apache logging formats already include response time or custom format is used"
+        echo "⚠ WARNING: Apache configuration had issues, but continuing with installation"
+        APACHE_STATUS="configuration issues"
     fi
 else
-    echo "Apache configuration not found, skipping LogFormat modifications"
+    echo "⚠ NOTE: configure_apache.sh not found - skipping Apache optimization"
+    APACHE_STATUS="not configured"
 fi
 
-# Test rsyslog configuration before applying
-rsyslogd -N1 -f /etc/rsyslog.conf
-if [ $? -ne 0 ]; then
-    echo "ERROR: Invalid rsyslog configuration. Please check the config files."
-    exit 1
-fi
-
-# Restart rsyslog service to apply all changes
-systemctl restart rsyslog
-if [ $? -eq 0 ]; then
-    echo "Rsyslog configured and restarted successfully"
+# Configure rsyslog using separate script (AFTER Apache config)
+RSYSLOG_SCRIPT="./configure_rsyslog.sh"
+if [ -f "$RSYSLOG_SCRIPT" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "CONFIGURING RSYSLOG (Step 2/3)"
+    echo "================================================================================"
+    
+    # Make sure the script is executable
+    chmod +x "$RSYSLOG_SCRIPT"
+    
+    # Run the rsyslog configuration script with agent ID
+    if bash "$RSYSLOG_SCRIPT" "$AGENT_ID"; then
+        echo "✓ Rsyslog configuration completed successfully"
+        RSYSLOG_STATUS="configured"
+    else
+        echo "✗ ERROR: Rsyslog configuration failed"
+        echo "Manual setup required - check rsyslog configuration"
+        exit 1
+    fi
 else
-    echo "ERROR: Failed to restart rsyslog. Check configuration."
-    exit 1
+    echo "⚠ WARNING: configure_rsyslog.sh not found - using basic rsyslog setup"
+    
+    # Fallback to basic configuration
+    echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
+    systemctl restart rsyslog
+    RSYSLOG_STATUS="basic setup"
+fi
+
+FAIL2BAN_SCRIPT="./configure_fail2ban.sh"
+if [ -f "$FAIL2BAN_SCRIPT" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/3)"
+    echo "================================================================================"
+    
+    # Make sure the script is executable
+    chmod +x "$FAIL2BAN_SCRIPT"
+    
+    # Run the fail2ban configuration script
+    if bash "$FAIL2BAN_SCRIPT"; then
+        echo "✓ Fail2ban security configuration completed successfully"
+        FAIL2BAN_STATUS="configured"
+    else
+        echo "⚠ WARNING: Fail2ban configuration had issues, but continuing with installation"
+        FAIL2BAN_STATUS="configuration issues"
+    fi
+else
+    echo ""
+    echo "================================================================================"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/3)"
+    echo "================================================================================"
+    echo "⚠ NOTE: configure_fail2ban.sh not found - skipping security configuration"
+    echo "To enable security features, place configure_fail2ban.sh in the same directory"
+    FAIL2BAN_STATUS="script not found"
 fi
 
 # Reload systemd to recognize the new service
@@ -220,7 +156,23 @@ systemctl start monitoring-agent
 
 # Verify service started successfully
 sleep 2
+
+# Reload systemd to recognize the new service
+systemctl daemon-reload
+
+# Enable the service to start on boot
+systemctl enable monitoring-agent
+
+# Start the service
+systemctl start monitoring-agent
+
+# Verify service started successfully
+sleep 2
 if systemctl is-active --quiet monitoring-agent; then
+    echo ""
+    echo "================================================================================"
+    echo "INSTALLATION COMPLETED SUCCESSFULLY"
+    echo "================================================================================"
     echo "Monitoring agent installed and started successfully with agent ID: $AGENT_ID"
     echo ""
     echo "Monitoring configuration summary:"
@@ -230,6 +182,18 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- All logs forwarded to 82.165.230.7:29514 without local storage"
     echo "- Queue size limited to 50MB to prevent disk issues"
     echo "- Using unified monitoring.conf configuration file"
+    echo ""
+    echo "Fail2ban security configuration:"
+    echo "- SSH brute force protection"
+    echo "- Apache error log monitoring"
+    echo "- Apache access log monitoring with custom filters"
+    echo "- Recidive jail for repeat offenders"
+    echo "- All configurations safely merged with existing settings"
+    echo ""
+    echo "Services status:"
+    echo "- Monitoring Agent: $(systemctl is-active monitoring-agent)"
+    echo "- Fail2ban: $(systemctl is-active fail2ban)"
+    echo "- Rsyslog: $(systemctl is-active rsyslog)"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1
