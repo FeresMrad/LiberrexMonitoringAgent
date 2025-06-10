@@ -2,7 +2,7 @@
 from . import system
 from . import ssh
 from . import apache
-
+from . import mysql
 def initialize():
     """Initialize all collectors."""
     system.initialize()
@@ -20,4 +20,7 @@ def collect_all(host):
     # Apache metrics
     metrics.extend(apache.collect(host))
     
+    # MySQL metrics
+    metrics.extend(mysql.collect(host))
+
     return metrics

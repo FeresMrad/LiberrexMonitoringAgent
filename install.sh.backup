@@ -6,88 +6,6 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# Function to validate MySQL configuration
-validate_mysql_config() {
-    echo "Validating MySQL configuration..."
-    
-    # Check if config.py exists
-    if [ ! -f "config.py" ]; then
-        echo "✗ ERROR: config.py not found in current directory"
-        echo "Please ensure you're running the install script from the agent directory"
-        exit 1
-    fi
-    
-    # Extract MySQL credentials from config.py
-    MYSQL_USER=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_USER
-print(MYSQL_USER)
-" 2>/dev/null)
-    
-    MYSQL_PASSWORD=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_PASSWORD
-print(MYSQL_PASSWORD)
-" 2>/dev/null)
-    
-    MYSQL_ENABLED=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_ENABLED
-print(MYSQL_ENABLED)
-" 2>/dev/null)
-    
-    # Check if MySQL monitoring is enabled
-    if [ "$MYSQL_ENABLED" = "False" ]; then
-        echo "⚠ NOTE: MySQL monitoring is disabled in config.py"
-        echo "To enable MySQL monitoring, set MYSQL_ENABLED = True in config.py and configure credentials"
-        return 0
-    fi
-    
-    # Validate MySQL credentials are not empty
-    if [ -z "$MYSQL_USER" ] || [ "$MYSQL_USER" = '""' ] || [ "$MYSQL_USER" = "''" ]; then
-        echo "✗ ERROR: MySQL monitoring is enabled but MYSQL_USER is empty in config.py"
-        echo ""
-        echo "Please configure MySQL credentials in config.py before running install.sh:"
-        echo "1. Edit config.py and set MYSQL_USER and MYSQL_PASSWORD"
-        echo "2. Create the MySQL monitoring user with these commands:"
-        echo "   mysql -u root -p"
-        echo "   CREATE USER 'your_monitoring_user'@'localhost' IDENTIFIED BY 'your_password';"
-        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'your_monitoring_user'@'localhost';"
-        echo "   GRANT SELECT ON performance_schema.* TO 'your_monitoring_user'@'localhost';"
-        echo "   FLUSH PRIVILEGES;"
-        echo ""
-        echo "Alternatively, set MYSQL_ENABLED = False in config.py to disable MySQL monitoring"
-        exit 1
-    fi
-    
-    if [ -z "$MYSQL_PASSWORD" ] || [ "$MYSQL_PASSWORD" = '""' ] || [ "$MYSQL_PASSWORD" = "''" ]; then
-        echo "✗ ERROR: MySQL monitoring is enabled but MYSQL_PASSWORD is empty in config.py"
-        echo ""
-        echo "Please configure MySQL credentials in config.py before running install.sh:"
-        echo "1. Edit config.py and set MYSQL_USER and MYSQL_PASSWORD"
-        echo "2. Create the MySQL monitoring user with these commands:"
-        echo "   mysql -u root -p"
-        echo "   CREATE USER 'your_monitoring_user'@'localhost' IDENTIFIED BY 'your_password';"
-        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'your_monitoring_user'@'localhost';"
-        echo "   GRANT SELECT ON performance_schema.* TO 'your_monitoring_user'@'localhost';"
-        echo "   FLUSH PRIVILEGES;"
-        echo ""
-        echo "Alternatively, set MYSQL_ENABLED = False in config.py to disable MySQL monitoring"
-        exit 1
-    fi
-    
-    echo "✓ MySQL configuration validation passed"
-    echo "  User: $MYSQL_USER"
-    echo "  Password: [CONFIGURED]"
-    return 0
-}
-
-# Validate MySQL configuration before proceeding
-validate_mysql_config
-
 # Update package lists
 apt update
 
@@ -97,8 +15,7 @@ apt install -y \
     python3-pip \
     python3-dev \
     python3-venv \
-    build-essential \
-    mysql-client
+    build-essential
 
 # Create the agent directory and subdirectories
 mkdir -p /opt/monitoring-agent/collectors
@@ -107,12 +24,12 @@ mkdir -p /opt/monitoring-agent/collectors
 python3 -m venv /opt/monitoring-agent/venv
 
 # Activate virtual environment and install Python packages
-/opt/monitoring-agent/venv/bin/pip install psutil requests influxdb-client uuid mysql-connector-python
+/opt/monitoring-agent/venv/bin/pip install psutil requests influxdb-client uuid
 
 # Copy agent files
 echo "Copying agent files..."
 cp agent.py config.py agent_id.py /opt/monitoring-agent/
-cp collectors/__init__.py collectors/system.py collectors/ssh.py collectors/apache.py collectors/mysql.py /opt/monitoring-agent/collectors/
+cp collectors/__init__.py collectors/system.py collectors/ssh.py collectors/apache.py /opt/monitoring-agent/collectors/
 
 # Create empty __init__.py if not copied
 touch /opt/monitoring-agent/collectors/__init__.py
@@ -132,51 +49,11 @@ else
     echo "Generated new agent-id: $AGENT_ID"
 fi
 
-# Test MySQL connection before proceeding
-echo ""
-echo "Testing MySQL connection..."
-if /opt/monitoring-agent/venv/bin/python3 -c "
-import sys
-sys.path.append('/opt/monitoring-agent')
-import mysql.connector
-from config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE, MYSQL_TIMEOUT
-
-try:
-    connection = mysql.connector.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE,
-        connection_timeout=MYSQL_TIMEOUT
-    )
-    connection.close()
-    print('MySQL connection successful')
-except Exception as e:
-    print(f'MySQL connection failed: {e}')
-    sys.exit(1)
-"; then
-    echo "✓ MySQL connection test successful"
-else
-    echo "✗ ERROR: MySQL connection test failed"
-    echo ""
-    echo "Please verify:"
-    echo "1. MySQL server is running"
-    echo "2. Credentials in config.py are correct"
-    echo "3. Monitoring user exists and has proper permissions:"
-    echo "   mysql -u root -p"
-    echo "   CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY 'your_password';"
-    echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$MYSQL_USER'@'localhost';"
-    echo "   GRANT SELECT ON performance_schema.* TO '$MYSQL_USER'@'localhost';"
-    echo "   FLUSH PRIVILEGES;"
-    exit 1
-fi
-
 # Create systemd service file
 cat > /etc/systemd/system/monitoring-agent.service << EOL
 [Unit]
 Description=System Monitoring Agent
-After=network.target mysql.service
+After=network.target
 
 [Service]
 ExecStart=/opt/monitoring-agent/venv/bin/python /opt/monitoring-agent/agent.py
@@ -192,7 +69,7 @@ APACHE_SCRIPT="./configure_apache.sh"
 if [ -f "$APACHE_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING APACHE (Step 1/4)"
+    echo "CONFIGURING APACHE (Step 1/3)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -216,7 +93,7 @@ RSYSLOG_SCRIPT="./configure_rsyslog.sh"
 if [ -f "$RSYSLOG_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING RSYSLOG (Step 2/4)"
+    echo "CONFIGURING RSYSLOG (Step 2/3)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -228,7 +105,7 @@ if [ -f "$RSYSLOG_SCRIPT" ]; then
         RSYSLOG_STATUS="configured"
     else
         echo "✗ ERROR: Rsyslog configuration failed"
-        echo "Manual setup required - check configure_rsyslog.sh"
+        echo "Manual setup required - check rsyslog configuration"
         exit 1
     fi
 else
@@ -244,7 +121,7 @@ FAIL2BAN_SCRIPT="./configure_fail2ban.sh"
 if [ -f "$FAIL2BAN_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/4)"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/3)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -261,17 +138,24 @@ if [ -f "$FAIL2BAN_SCRIPT" ]; then
 else
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/4)"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/3)"
     echo "================================================================================"
     echo "⚠ NOTE: configure_fail2ban.sh not found - skipping security configuration"
     echo "To enable security features, place configure_fail2ban.sh in the same directory"
     FAIL2BAN_STATUS="script not found"
 fi
 
-echo ""
-echo "================================================================================"
-echo "STARTING MONITORING AGENT (Step 4/4)"
-echo "================================================================================"
+# Reload systemd to recognize the new service
+systemctl daemon-reload
+
+# Enable the service to start on boot
+systemctl enable monitoring-agent
+
+# Start the service
+systemctl start monitoring-agent
+
+# Verify service started successfully
+sleep 2
 
 # Reload systemd to recognize the new service
 systemctl daemon-reload
@@ -292,18 +176,12 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "Monitoring agent installed and started successfully with agent ID: $AGENT_ID"
     echo ""
     echo "Monitoring configuration summary:"
-    echo "- System metrics (CPU, Memory, Disk, Network)"
     echo "- SSH authentication events from /var/log/auth.log"
     echo "- Apache access logs from /var/log/apache2/access.log"
-    echo "- MySQL performance and health metrics"
     echo "- Server-status requests filtered out"
     echo "- All logs forwarded to 82.165.230.7:29514 without local storage"
     echo "- Queue size limited to 50MB to prevent disk issues"
     echo "- Using unified monitoring.conf configuration file"
-    echo ""
-    echo "MySQL monitoring status:"
-    echo "- MySQL User: $MYSQL_USER"
-    echo "- Connection: ✓ Verified"
     echo ""
     echo "Fail2ban security configuration:"
     echo "- SSH brute force protection"
@@ -316,7 +194,6 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- Monitoring Agent: $(systemctl is-active monitoring-agent)"
     echo "- Fail2ban: $(systemctl is-active fail2ban)"
     echo "- Rsyslog: $(systemctl is-active rsyslog)"
-    echo "- MySQL: $(systemctl is-active mysql)"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1
