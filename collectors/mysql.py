@@ -181,12 +181,6 @@ def collect_mysql_metrics(host):
             'connections': int(status_vars.get('Connections', 0)),
             'threads_connected': int(status_vars.get('Threads_connected', 0)),
             'threads_running': int(status_vars.get('Threads_running', 0)),
-            'aborted_connects': int(status_vars.get('Aborted_connects', 0)),
-            'aborted_clients': int(status_vars.get('Aborted_clients', 0)),
-            'qcache_hits': int(status_vars.get('Qcache_hits', 0)),
-            'qcache_queries_in_cache': int(status_vars.get('Qcache_queries_in_cache', 0)),
-            'qcache_inserts': int(status_vars.get('Qcache_inserts', 0)),
-            'qcache_not_cached': int(status_vars.get('Qcache_not_cached', 0)),
             'innodb_buffer_pool_read_requests': int(status_vars.get('Innodb_buffer_pool_read_requests', 0)),
             'innodb_buffer_pool_reads': int(status_vars.get('Innodb_buffer_pool_reads', 0)),
             'innodb_buffer_pool_pages_total': int(status_vars.get('Innodb_buffer_pool_pages_total', 0)),
@@ -199,11 +193,10 @@ def collect_mysql_metrics(host):
         # Get storage sizes
         data_size, log_size = get_mysql_data_directory_size()
         
-        # MySQL Health Check
+        # MySQL Health Check (removed max_connections)
         mysql_points.append(
             Point("mysql_health").tag("host", host)
                 .field("is_responsive", 1)  # 1 = healthy
-                .field("max_connections", max_connections)
         )
         
         # MySQL Process Resource Usage
@@ -215,28 +208,23 @@ def collect_mysql_metrics(host):
                 .field("log_size_bytes", log_size)
         )
         
-        # MySQL Connection Status
+        # MySQL Connection Status (removed aborted_connects and aborted_clients)
         idle_connections = current_metrics['threads_connected'] - current_metrics['threads_running']
         mysql_points.append(
             Point("mysql_connections").tag("host", host)
                 .field("active_connections", current_metrics['threads_running'])
                 .field("idle_connections", idle_connections)
                 .field("total_connections", current_metrics['threads_connected'])
-                .field("aborted_connects", current_metrics['aborted_connects'])
-                .field("aborted_clients", current_metrics['aborted_clients'])
                 .field("max_connections", max_connections)
         )
         
-        # MySQL Query Cache Hit Ratio
-        # Query Cache Hit Ratio = (Qcache_hits) / (Qcache_hits + Qcache_inserts + Qcache_not_cached) * 100
-        total_cache_requests = current_metrics['qcache_hits'] + current_metrics['qcache_inserts'] + current_metrics['qcache_not_cached']
-        query_cache_hit_ratio = (current_metrics['qcache_hits'] / total_cache_requests * 100) if total_cache_requests > 0 else 0
-        
-        mysql_points.append(
-            Point("mysql_cache").tag("host", host)
-                .field("query_cache_hit_ratio", query_cache_hit_ratio)
-                .field("queries_in_cache", current_metrics['qcache_queries_in_cache'])
-        )
+        # MySQL Query Cache Hit Ratio (removed queries_in_cache and query_cache_hit_ratio)
+        # Note: This measurement is now empty, but keeping the structure in case other cache metrics are added later
+        # If no other cache metrics are needed, this entire section can be removed
+        # mysql_points.append(
+        #     Point("mysql_cache").tag("host", host)
+        #         # All fields removed as requested
+        # )
         
         # MySQL InnoDB Buffer Pool Hit Ratio
         # Buffer Pool Hit Ratio = (1 - (Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests)) * 100
@@ -287,16 +275,16 @@ def collect_mysql_metrics(host):
         if last_mysql_metrics and last_collection_time:
             time_delta = current_time - last_collection_time
             
-            # Calculate deltas for the 30-second window
+            # Calculate deltas for the collection window
             queries_delta = current_metrics['queries'] - last_mysql_metrics['queries']
             bytes_sent_delta = current_metrics['bytes_sent'] - last_mysql_metrics['bytes_sent']
             bytes_received_delta = current_metrics['bytes_received'] - last_mysql_metrics['bytes_received']
             
-            # Calculate rates per second, then multiply by collection interval for total in window
+            # Calculate rates - queries per window, bytes per second
             if time_delta > 0:
-                queries_per_30sec = queries_delta  # This is already the count for our collection window
-                bytes_sent_per_second = bytes_sent_delta / time_delta
-                bytes_received_per_second = bytes_received_delta / time_delta
+                queries_per_30sec = queries_delta  # This is the count for our collection window
+                bytes_sent_per_second = bytes_sent_delta / time_delta  # True per-second rate
+                bytes_received_per_second = bytes_received_delta / time_delta  # True per-second rate
                 
                 mysql_points.append(
                     Point("mysql_performance").tag("host", host)
@@ -312,6 +300,7 @@ def collect_mysql_metrics(host):
             
             time_delta = current_time - last_collection_time if last_collection_time else 30
             
+            # Calculate true per-second rates
             mysql_points.append(
                 Point("mysql_disk_io").tag("host", host)
                     .field("disk_read_per_second", disk_read_delta / time_delta if time_delta > 0 else 0)
