@@ -6,87 +6,84 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# Function to validate MySQL configuration
-validate_mysql_config() {
-    echo "Validating MySQL configuration..."
+# Check if .env file exists
+if [ ! -f ".env" ]; then
+    echo "✗ ERROR: .env file not found"
+    echo ""
+    echo "Please create a .env file based on .env.template:"
+    echo "1. Copy .env.template to .env: cp .env.template .env"
+    echo "2. Edit .env and fill in your actual values"
+    echo "3. Run install.sh again"
+    echo ""
+    echo "Required variables in .env:"
+    echo "- INFLUXDB_URL"
+    echo "- INFLUXDB_TOKEN"
+    echo "- INFLUXDB_ORG"
+    echo "- INFLUXDB_BUCKET"
+    echo "- REMOTE_LOG_SERVER"
+    echo "- MYSQL_HOST (for MySQL monitoring)"
+    echo "- MYSQL_PORT (for MySQL monitoring)"
+    echo "- MYSQL_USER (for MySQL monitoring)"
+    echo "- MYSQL_PASSWORD (for MySQL monitoring)"
+    exit 1
+fi
+
+echo "Found .env file, proceeding with installation..."
+
+# Function to validate configuration using environment variables
+validate_config() {
+    echo "Validating configuration from .env file..."
     
-    # Check if config.py exists
-    if [ ! -f "config.py" ]; then
-        echo "✗ ERROR: config.py not found in current directory"
-        echo "Please ensure you're running the install script from the agent directory"
+    # Load environment variables
+    export $(grep -v '^#' .env | xargs)
+    
+    # Check required variables
+    if [ -z "$INFLUXDB_URL" ]; then
+        echo "✗ ERROR: INFLUXDB_URL is required in .env file"
         exit 1
     fi
     
-    # Extract MySQL credentials from config.py
-    MYSQL_USER=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_USER
-print(MYSQL_USER)
-" 2>/dev/null)
-    
-    MYSQL_PASSWORD=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_PASSWORD
-print(MYSQL_PASSWORD)
-" 2>/dev/null)
-    
-    MYSQL_ENABLED=$(python3 -c "
-import sys
-sys.path.append('.')
-from config import MYSQL_ENABLED
-print(MYSQL_ENABLED)
-" 2>/dev/null)
-    
-    # Check if MySQL monitoring is enabled
-    if [ "$MYSQL_ENABLED" = "False" ]; then
-        echo "⚠ NOTE: MySQL monitoring is disabled in config.py"
-        echo "To enable MySQL monitoring, set MYSQL_ENABLED = True in config.py and configure credentials"
-        return 0
-    fi
-    
-    # Validate MySQL credentials are not empty
-    if [ -z "$MYSQL_USER" ] || [ "$MYSQL_USER" = '""' ] || [ "$MYSQL_USER" = "''" ]; then
-        echo "✗ ERROR: MySQL monitoring is enabled but MYSQL_USER is empty in config.py"
-        echo ""
-        echo "Please configure MySQL credentials in config.py before running install.sh:"
-        echo "1. Edit config.py and set MYSQL_USER and MYSQL_PASSWORD"
-        echo "2. Create the MySQL monitoring user with these commands:"
-        echo "   mysql -u root -p"
-        echo "   CREATE USER 'your_monitoring_user'@'localhost' IDENTIFIED BY 'your_password';"
-        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'your_monitoring_user'@'localhost';"
-        echo "   GRANT SELECT ON performance_schema.* TO 'your_monitoring_user'@'localhost';"
-        echo "   FLUSH PRIVILEGES;"
-        echo ""
-        echo "Alternatively, set MYSQL_ENABLED = False in config.py to disable MySQL monitoring"
+    if [ -z "$INFLUXDB_TOKEN" ]; then
+        echo "✗ ERROR: INFLUXDB_TOKEN is required in .env file"
         exit 1
     fi
     
-    if [ -z "$MYSQL_PASSWORD" ] || [ "$MYSQL_PASSWORD" = '""' ] || [ "$MYSQL_PASSWORD" = "''" ]; then
-        echo "✗ ERROR: MySQL monitoring is enabled but MYSQL_PASSWORD is empty in config.py"
-        echo ""
-        echo "Please configure MySQL credentials in config.py before running install.sh:"
-        echo "1. Edit config.py and set MYSQL_USER and MYSQL_PASSWORD"
-        echo "2. Create the MySQL monitoring user with these commands:"
-        echo "   mysql -u root -p"
-        echo "   CREATE USER 'your_monitoring_user'@'localhost' IDENTIFIED BY 'your_password';"
-        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'your_monitoring_user'@'localhost';"
-        echo "   GRANT SELECT ON performance_schema.* TO 'your_monitoring_user'@'localhost';"
-        echo "   FLUSH PRIVILEGES;"
-        echo ""
-        echo "Alternatively, set MYSQL_ENABLED = False in config.py to disable MySQL monitoring"
+    if [ -z "$INFLUXDB_ORG" ]; then
+        echo "✗ ERROR: INFLUXDB_ORG is required in .env file"
         exit 1
     fi
     
-    echo "✓ MySQL configuration validation passed"
-    echo "  User: $MYSQL_USER"
-    echo "  Password: [CONFIGURED]"
+    if [ -z "$INFLUXDB_BUCKET" ]; then
+        echo "✗ ERROR: INFLUXDB_BUCKET is required in .env file"
+        exit 1
+    fi
+    
+    if [ -z "$REMOTE_LOG_SERVER" ]; then
+        echo "✗ ERROR: REMOTE_LOG_SERVER is required in .env file"
+        exit 1
+    fi
+    
+    # Check MySQL configuration (credentials always required if you want MySQL monitoring)
+    # The MYSQL_ENABLED flag is now in config.py, so we check if credentials are provided
+    if [ -n "$MYSQL_HOST" ] && [ -n "$MYSQL_PORT" ] && [ -n "$MYSQL_USER" ] && [ -n "$MYSQL_PASSWORD" ]; then
+        echo "✓ MySQL credentials provided - MySQL monitoring will be enabled"
+        MYSQL_CONFIGURED=true
+    else
+        echo "⚠ NOTE: MySQL credentials not provided - MySQL monitoring will be disabled"
+        echo "  To enable MySQL monitoring, add these variables to .env:"
+        echo "  - MYSQL_HOST"
+        echo "  - MYSQL_PORT" 
+        echo "  - MYSQL_USER"
+        echo "  - MYSQL_PASSWORD"
+        MYSQL_CONFIGURED=false
+    fi
+    
+    echo "✓ Configuration validation passed"
     return 0
 }
 
-# Validate MySQL configuration before proceeding
-validate_mysql_config
+# Validate configuration before proceeding
+validate_config
 
 # Update package lists
 apt update
@@ -107,11 +104,11 @@ mkdir -p /opt/monitoring-agent/collectors
 python3 -m venv /opt/monitoring-agent/venv
 
 # Activate virtual environment and install Python packages
-/opt/monitoring-agent/venv/bin/pip install psutil requests influxdb-client uuid mysql-connector-python
+/opt/monitoring-agent/venv/bin/pip install psutil requests influxdb-client uuid mysql-connector-python python-dotenv
 
 # Copy agent files
 echo "Copying agent files..."
-cp agent.py config.py agent_id.py /opt/monitoring-agent/
+cp agent.py config.py agent_id.py .env /opt/monitoring-agent/
 cp collectors/__init__.py collectors/system.py collectors/ssh.py collectors/apache.py collectors/mysql.py /opt/monitoring-agent/collectors/
 
 # Create empty __init__.py if not copied
@@ -119,6 +116,7 @@ touch /opt/monitoring-agent/collectors/__init__.py
 
 # Set correct permissions
 chmod 755 /opt/monitoring-agent/agent.py
+chmod 600 /opt/monitoring-agent/.env  # Restrict access to environment file
 
 # Generate or read agent-id for rsyslog configuration
 AGENT_ID_FILE="/opt/monitoring-agent/agent-id"
@@ -132,14 +130,14 @@ else
     echo "Generated new agent-id: $AGENT_ID"
 fi
 
-# Test MySQL connection before proceeding
-echo ""
-echo "Testing MySQL connection..."
-if /opt/monitoring-agent/venv/bin/python3 -c "
+# Test MySQL connection before proceeding (only if MySQL credentials are provided)
+if [ "$MYSQL_CONFIGURED" = "true" ]; then
+    echo ""
+    echo "Testing MySQL connection..."
+    if cd /opt/monitoring-agent && /opt/monitoring-agent/venv/bin/python3 -c "
 import sys
-sys.path.append('/opt/monitoring-agent')
-import mysql.connector
 from config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE, MYSQL_TIMEOUT
+import mysql.connector
 
 try:
     connection = mysql.connector.connect(
@@ -156,20 +154,24 @@ except Exception as e:
     print(f'MySQL connection failed: {e}')
     sys.exit(1)
 "; then
-    echo "✓ MySQL connection test successful"
+        echo "✓ MySQL connection test successful"
+    else
+        echo "✗ ERROR: MySQL connection test failed"
+        echo ""
+        echo "Please verify:"
+        echo "1. MySQL server is running"
+        echo "2. Credentials in .env file are correct"
+        echo "3. Monitoring user exists and has proper permissions:"
+        echo "   mysql -u root -p"
+        echo "   CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY 'your_password';"
+        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$MYSQL_USER'@'localhost';"
+        echo "   GRANT SELECT ON performance_schema.* TO '$MYSQL_USER'@'localhost';"
+        echo "   FLUSH PRIVILEGES;"
+        exit 1
+    fi
+    cd - > /dev/null
 else
-    echo "✗ ERROR: MySQL connection test failed"
-    echo ""
-    echo "Please verify:"
-    echo "1. MySQL server is running"
-    echo "2. Credentials in config.py are correct"
-    echo "3. Monitoring user exists and has proper permissions:"
-    echo "   mysql -u root -p"
-    echo "   CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY 'your_password';"
-    echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$MYSQL_USER'@'localhost';"
-    echo "   GRANT SELECT ON performance_schema.* TO '$MYSQL_USER'@'localhost';"
-    echo "   FLUSH PRIVILEGES;"
-    exit 1
+    echo "⚠ NOTE: Skipping MySQL connection test (MySQL credentials not provided)"
 fi
 
 # Create systemd service file
@@ -182,6 +184,7 @@ After=network.target mysql.service
 ExecStart=/opt/monitoring-agent/venv/bin/python /opt/monitoring-agent/agent.py
 WorkingDirectory=/opt/monitoring-agent
 Restart=always
+Environment=PATH=/opt/monitoring-agent/venv/bin
 
 [Install]
 WantedBy=multi-user.target
@@ -221,6 +224,9 @@ if [ -f "$RSYSLOG_SCRIPT" ]; then
     
     # Make sure the script is executable
     chmod +x "$RSYSLOG_SCRIPT"
+    
+    # Export REMOTE_LOG_SERVER for the rsyslog script
+    export REMOTE_LOG_SERVER
     
     # Run the rsyslog configuration script with agent ID
     if bash "$RSYSLOG_SCRIPT" "$AGENT_ID"; then
@@ -295,15 +301,19 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- System metrics (CPU, Memory, Disk, Network)"
     echo "- SSH authentication events from /var/log/auth.log"
     echo "- Apache access logs from /var/log/apache2/access.log"
-    echo "- MySQL performance and health metrics"
+    
+    if [ "$MYSQL_CONFIGURED" = "true" ]; then
+        echo "- MySQL performance and health metrics"
+        echo "- MySQL User: $MYSQL_USER"
+        echo "- Connection: ✓ Verified"
+    else
+        echo "- MySQL monitoring: Disabled (no credentials provided)"
+    fi
+    
     echo "- Server-status requests filtered out"
-    echo "- All logs forwarded to 82.165.230.7:29514 without local storage"
+    echo "- All logs forwarded to $REMOTE_LOG_SERVER without local storage"
     echo "- Queue size limited to 50MB to prevent disk issues"
     echo "- Using unified monitoring.conf configuration file"
-    echo ""
-    echo "MySQL monitoring status:"
-    echo "- MySQL User: $MYSQL_USER"
-    echo "- Connection: ✓ Verified"
     echo ""
     echo "Fail2ban security configuration:"
     echo "- SSH brute force protection"
@@ -317,6 +327,10 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- Fail2ban: $(systemctl is-active fail2ban)"
     echo "- Rsyslog: $(systemctl is-active rsyslog)"
     echo "- MySQL: $(systemctl is-active mysql)"
+    echo ""
+    echo "SECURITY NOTE:"
+    echo "- Sensitive configuration stored in /opt/monitoring-agent/.env (600 permissions)"
+    echo "- Never commit .env files to version control"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1

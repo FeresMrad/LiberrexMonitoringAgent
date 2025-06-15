@@ -17,9 +17,16 @@ if [ -z "$1" ]; then
 fi
 
 AGENT_ID="$1"
-REMOTE_LOG_SERVER="82.165.230.7:29514"
+
+# Get remote log server from environment (required)
+if [ -z "$REMOTE_LOG_SERVER" ]; then
+    echo "ERROR: REMOTE_LOG_SERVER environment variable is required"
+    echo "Please set REMOTE_LOG_SERVER in your .env file"
+    exit 1
+fi
 
 echo "Configuring rsyslog for monitoring agent with ID: $AGENT_ID"
+echo "Remote log server: $REMOTE_LOG_SERVER"
 
 # Clean up any existing LocalHostName configuration to prevent duplicates
 if grep -q "^\$LocalHostName" /etc/rsyslog.conf; then
