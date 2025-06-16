@@ -118,11 +118,8 @@ if (\$programname == 'apache-access') then {
 # Error handling and queue configuration
 ###############################################################################
 # Prevent infinite retries and disk space issues
-\$ActionResumeRetryCount 3
-\$ActionQueueMaxDiskSpace 50M
-\$ActionQueueType LinkedList
-\$ActionQueueFileName liberrex_monitoring_queue
-\$ActionQueueSaveOnShutdown on
+\$ActionResumeRetryCount 0
+\$ActionQueueType Direct
 
 # Drop messages if remote server is unreachable for too long
 \$ActionExecOnlyWhenPreviousIsSuspended on
