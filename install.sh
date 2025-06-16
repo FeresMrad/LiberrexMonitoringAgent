@@ -327,10 +327,6 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- Fail2ban: $(systemctl is-active fail2ban)"
     echo "- Rsyslog: $(systemctl is-active rsyslog)"
     echo "- MySQL: $(systemctl is-active mysql)"
-    echo ""
-    echo "SECURITY NOTE:"
-    echo "- Sensitive configuration stored in /opt/monitoring-agent/.env (600 permissions)"
-    echo "- Never commit .env files to version control"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1
