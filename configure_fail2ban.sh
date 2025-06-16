@@ -120,6 +120,27 @@ datepattern = \[%%d/%%b/%%Y:%%H:%%M:%%S %%z\]
 ignoreregex =
 EOF
 
+# NEW: Create apache-python-exposure filter for Python environment exposure
+cat > /etc/fail2ban/filter.d/apache-python-exposure.conf << 'EOF'
+# Filter for Python environment exposure - CRITICAL SECURITY RISK
+[Definition]
+
+# Catch successful access to Python directories and files (THIS IS EXTREMELY BAD)
+failregex = ^<HOST> .* "GET .*/(?:venv|env|__pycache__|site-packages|pip|python).* HTTP/[0-9.]+" 200
+# Match successful access to Python files
+            ^<HOST> .* "GET .*\.py(?:\?.*?)? HTTP/[0-9.]+" 200
+# Match successful access to Python cache directories
+            ^<HOST> .* "GET .*/__pycache__/.* HTTP/[0-9.]+" 200
+# Match successful access to pip directories
+            ^<HOST> .* "GET .*/pip/.* HTTP/[0-9.]+" 200
+# Match successful access to virtual environment binaries
+            ^<HOST> .* "GET .*/(?:bin|Scripts)/(?:python|pip).* HTTP/[0-9.]+" 200
+
+datepattern = \[%%d/%%b/%%Y:%%H:%%M:%%S %%z\]
+
+ignoreregex =
+EOF
+
 echo "Custom filters created successfully."
 
 # Function to add jails without touching existing configuration
@@ -230,11 +251,33 @@ findtime = 10m"; then
         added_jails+=("apache-access-shellshock")
     fi
     
+    # NEW: Add Python environment exposure jail (CRITICAL SECURITY)
+    if ! append_jail_if_missing "apache-python-exposure" "[apache-python-exposure]
+enabled = true
+filter = apache-python-exposure
+port = http,https
+logpath = /var/log/apache2/*access.log
+backend = polling
+maxretry = 1
+bantime = -1
+findtime = 1h"; then
+        added_jails+=("apache-python-exposure")
+    fi
+    
     # Report what was added
     if [ ${#added_jails[@]} -gt 0 ]; then
         echo ""
         echo "Added ${#added_jails[@]} new custom jails:"
         printf " - %s\n" "${added_jails[@]}"
+        
+        # Special warning for Python exposure jail
+        if [[ " ${added_jails[@]} " =~ " apache-python-exposure " ]]; then
+            echo ""
+            echo "⚠️  CRITICAL SECURITY JAIL ADDED: apache-python-exposure"
+            echo "    This jail provides PERMANENT BANS for Python environment exposure"
+            echo "    maxretry=1, bantime=-1 (permanent)"
+            echo "    Protects against: venv/, env/, __pycache__/, .py files, pip/"
+        fi
     else
         echo ""
         echo "All custom jails already exist - no changes made to preserve existing configuration"
@@ -323,9 +366,16 @@ echo "✓ Backup created of original jail.local"
 echo "✓ Only NEW custom jails added (if not already present)"
 echo ""
 echo "WHAT WAS ADDED:"
-echo "- 6 new Apache access log monitoring filters"
+echo "- 7 new Apache access log monitoring filters"
 echo "- Custom jails for enhanced web security monitoring"
 echo "- Protection against auth failures, bots, exploits, and attacks"
+echo "- 🔒 CRITICAL: Python environment exposure protection (PERMANENT BANS)"
+echo ""
+echo "CRITICAL SECURITY PROTECTION:"
+echo "- apache-python-exposure: Permanent ban for accessing Python environments"
+echo "  • Protects: /venv/, /env/, /__pycache__/, .py files, /pip/"
+echo "  • Action: Immediate permanent ban (maxretry=1, bantime=-1)"
+echo "  • Risk: Exposed Python environments can leak sensitive code/configs"
 echo ""
 echo "YOUR EXISTING SETTINGS PRESERVED:"
 echo "- bantime: $(grep -A 20 '^\[DEFAULT\]' /etc/fail2ban/jail.local 2>/dev/null | grep '^bantime' | head -1 || echo 'unchanged')"
