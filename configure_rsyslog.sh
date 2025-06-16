@@ -91,7 +91,7 @@ if (\$programname == 'sshd') then {
 ###############################################################################
 # Monitor Apache's main access log
 input(type="imfile"
-      File="/var/log/apache2/access.log"
+      File="/var/log/apache2/*access.log"
       Tag="apache-access:"
       Facility="local2"
       Severity="info"
