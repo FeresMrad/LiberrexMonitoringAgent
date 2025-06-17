@@ -66,7 +66,7 @@ To set up MySQL monitoring:
 1. Create a dedicated monitoring user in MySQL:
    mysql -u root -p
    CREATE USER 'monitoring_user'@'localhost' IDENTIFIED BY 'secure_password';
-   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'monitoring_user'@'localhost';
+   GRANT PROCESS ON *.* TO 'monitoring_user'@'localhost';
    GRANT SELECT ON performance_schema.* TO 'monitoring_user'@'localhost';
    FLUSH PRIVILEGES;
 
