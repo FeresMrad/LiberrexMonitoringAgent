@@ -7,7 +7,7 @@ def collect_ssh_sessions(host):
     """Collect active SSH sessions for the host."""
     try:
         # Run the 'who' command to get active sessions
-        process = subprocess.Popen(['who'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(['/usr/bin/who'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
 
         if stderr:
