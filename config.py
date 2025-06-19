@@ -36,27 +36,21 @@ APACHE_TIMEOUT = 5  # Connection timeout in seconds
 MYSQL_HOST = os.getenv("MYSQL_HOST")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT")) if os.getenv("MYSQL_PORT") else None
 MYSQL_USER = os.getenv("MYSQL_USER")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")  # Default to empty string, not None
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
 MYSQL_DATABASE = "information_schema"  # Standard database for monitoring queries
+MYSQL_ENABLED = True  # Can be configured in code if needed
 MYSQL_TIMEOUT = 5  # Connection timeout in seconds
 
-# Determine if MySQL monitoring should be enabled based on available credentials
-# MySQL is enabled if we have at least HOST, PORT, and USER
-# PASSWORD can be empty (for servers that don't require passwords)
-if MYSQL_HOST and MYSQL_PORT and MYSQL_USER:
-    MYSQL_ENABLED = True
-    print(f"MySQL monitoring enabled: {MYSQL_USER}@{MYSQL_HOST}:{MYSQL_PORT}")
-    if not MYSQL_PASSWORD:
-        print("MySQL monitoring: Using empty password (passwordless connection)")
-else:
-    MYSQL_ENABLED = False
-    print("MySQL monitoring disabled: Missing required credentials (HOST, PORT, USER)")
+# Validate MySQL configuration if enabled
+if MYSQL_ENABLED:
     if not MYSQL_HOST:
-        print("  - Missing MYSQL_HOST")
+        raise ValueError("MYSQL_HOST environment variable is required when MySQL monitoring is enabled")
     if not MYSQL_PORT:
-        print("  - Missing MYSQL_PORT") 
+        raise ValueError("MYSQL_PORT environment variable is required when MySQL monitoring is enabled")
     if not MYSQL_USER:
-        print("  - Missing MYSQL_USER")
+        raise ValueError("MYSQL_USER environment variable is required when MySQL monitoring is enabled")
+    if not MYSQL_PASSWORD:
+        raise ValueError("MYSQL_PASSWORD environment variable is required when MySQL monitoring is enabled")
 
 # Remote logging configuration
 REMOTE_LOG_SERVER = os.getenv("REMOTE_LOG_SERVER")
@@ -69,30 +63,17 @@ if not REMOTE_LOG_SERVER:
 """
 To set up MySQL monitoring:
 
-1. For MySQL servers WITH passwords:
+1. Create a dedicated monitoring user in MySQL:
    mysql -u root -p
    CREATE USER 'monitoring_user'@'localhost' IDENTIFIED BY 'secure_password';
    GRANT PROCESS ON *.* TO 'monitoring_user'@'localhost';
    GRANT SELECT ON performance_schema.* TO 'monitoring_user'@'localhost';
    FLUSH PRIVILEGES;
 
-   Set in .env:
+2. Set environment variables in your .env file:
    MYSQL_USER=monitoring_user
    MYSQL_PASSWORD=secure_password
 
-2. For MySQL servers WITHOUT passwords:
-   mysql -u root
-   GRANT PROCESS ON *.* TO 'root'@'localhost';
-   GRANT SELECT ON performance_schema.* TO 'root'@'localhost';
-   FLUSH PRIVILEGES;
-
-   Set in .env:
-   MYSQL_USER=root
-   MYSQL_PASSWORD=
-   (or omit MYSQL_PASSWORD entirely)
-
 3. Test the connection:
    mysql -u monitoring_user -p -e "SHOW PROCESSLIST;"
-   or
-   mysql -u root -e "SHOW PROCESSLIST;"
 """
