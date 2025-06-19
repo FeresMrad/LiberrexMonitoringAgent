@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Rsyslog Configuration Script for Monitoring Agent
-# Configures rsyslog to forward SSH and Apache logs to remote server
+# Configures rsyslog to forward SSH, Apache, and MySQL logs to remote server
 
 # Check if script is run as root
 if [[ $EUID -ne 0 ]]; then
@@ -54,7 +54,9 @@ echo "\$LocalHostName $AGENT_ID" >> /etc/rsyslog.conf
 OLD_CONFIGS=(
     "/etc/rsyslog.d/ssh-monitoring.conf"
     "/etc/rsyslog.d/apache-monitoring.conf"
+    "/etc/rsyslog.d/mysql-monitoring.conf"
     "/etc/rsyslog.d/monitoring.conf"
+    "/etc/rsyslog.d/liberrex-monitoring.conf"
 )
 
 for config_file in "${OLD_CONFIGS[@]}"; do
@@ -115,6 +117,41 @@ if (\$programname == 'apache-access') then {
 }
 
 ###############################################################################
+# MySQL Log Monitoring
+###############################################################################
+# Monitor MySQL error log
+input(type="imfile"
+      File="/var/log/mysql/error.log"
+      Tag="mysql-error:"
+      Facility="local3"
+      Severity="error"
+      PersistStateInterval="200"
+)
+
+# Monitor MySQL slow query log
+input(type="imfile"
+      File="/var/log/mysql/mysql-slow.log"
+      Tag="mysql-slow:"
+      Facility="local4"
+      Severity="warning"
+      PersistStateInterval="200"
+)
+
+# Forward MySQL error logs
+if (\$programname == 'mysql-error') then {
+    @@$REMOTE_LOG_SERVER
+    stop
+}
+
+# Forward MySQL slow query logs
+if (\$programname == 'mysql-slow') then {
+    @@$REMOTE_LOG_SERVER
+    stop
+}
+
+
+
+###############################################################################
 # Error handling and queue configuration
 ###############################################################################
 # Prevent infinite retries and disk space issues
@@ -131,7 +168,49 @@ EOL
 
 echo "Created rsyslog configuration: /etc/rsyslog.d/liberrex-monitoring.conf"
 
+# Check if MySQL log files exist and create them if needed
+MYSQL_ERROR_LOG="/var/log/mysql/error.log"
+MYSQL_SLOW_LOG="/var/log/mysql/mysql-slow.log"
+MYSQL_LOG_DIR="/var/log/mysql"
+
+echo ""
+echo "Checking MySQL log files..."
+
+# Create MySQL log directory if it doesn't exist
+if [ ! -d "$MYSQL_LOG_DIR" ]; then
+    echo "Creating MySQL log directory: $MYSQL_LOG_DIR"
+    mkdir -p "$MYSQL_LOG_DIR"
+    chown mysql:mysql "$MYSQL_LOG_DIR"
+    chmod 750 "$MYSQL_LOG_DIR"
+fi
+
+# Create MySQL error log if it doesn't exist
+if [ ! -f "$MYSQL_ERROR_LOG" ]; then
+    echo "Creating MySQL error log: $MYSQL_ERROR_LOG"
+    touch "$MYSQL_ERROR_LOG"
+    chown mysql:mysql "$MYSQL_ERROR_LOG"
+    chmod 640 "$MYSQL_ERROR_LOG"
+else
+    echo "✓ MySQL error log exists: $MYSQL_ERROR_LOG"
+fi
+
+# Create MySQL slow query log if it doesn't exist
+if [ ! -f "$MYSQL_SLOW_LOG" ]; then
+    echo "Creating MySQL slow query log: $MYSQL_SLOW_LOG"
+    touch "$MYSQL_SLOW_LOG"
+    chown mysql:mysql "$MYSQL_SLOW_LOG"
+    chmod 640 "$MYSQL_SLOW_LOG"
+else
+    echo "✓ MySQL slow query log exists: $MYSQL_SLOW_LOG"
+fi
+
+# Set proper permissions for rsyslog to read MySQL logs
+echo "Setting proper permissions for rsyslog to read MySQL logs..."
+# Add rsyslog user to mysql group to read log files
+usermod -a -G mysql syslog 2>/dev/null || echo "Note: Could not add syslog user to mysql group (may not be needed)"
+
 # Test rsyslog configuration before applying
+echo ""
 echo "Testing rsyslog configuration..."
 if rsyslogd -N1 -f /etc/rsyslog.conf; then
     echo "✓ Rsyslog configuration test passed"
@@ -149,6 +228,40 @@ if rsyslogd -N1 -f /etc/rsyslog.conf; then
             # Verify our configuration file is being read
             if rsyslogd -N1 | grep -q "liberrex-monitoring.conf"; then
                 echo "✓ Liberrex monitoring configuration loaded"
+            fi
+            
+            # Check if MySQL is running and logs are being generated
+            echo ""
+            echo "Verifying MySQL log monitoring setup..."
+            if systemctl is-active --quiet mysql; then
+                echo "✓ MySQL service is running"
+                
+                # Check if log files are readable by rsyslog
+                if [ -r "$MYSQL_ERROR_LOG" ]; then
+                    echo "✓ MySQL error log is readable: $MYSQL_ERROR_LOG"
+                else
+                    echo "⚠ WARNING: MySQL error log may not be readable by rsyslog"
+                fi
+                
+                if [ -r "$MYSQL_SLOW_LOG" ]; then
+                    echo "✓ MySQL slow query log is readable: $MYSQL_SLOW_LOG"
+                else
+                    echo "⚠ WARNING: MySQL slow query log may not be readable by rsyslog"
+                fi
+                
+                # Show current log file sizes
+                if [ -f "$MYSQL_ERROR_LOG" ]; then
+                    ERROR_SIZE=$(stat -f%z "$MYSQL_ERROR_LOG" 2>/dev/null || stat -c%s "$MYSQL_ERROR_LOG" 2>/dev/null || echo "unknown")
+                    echo "  - Error log size: $ERROR_SIZE bytes"
+                fi
+                
+                if [ -f "$MYSQL_SLOW_LOG" ]; then
+                    SLOW_SIZE=$(stat -f%z "$MYSQL_SLOW_LOG" 2>/dev/null || stat -c%s "$MYSQL_SLOW_LOG" 2>/dev/null || echo "unknown")
+                    echo "  - Slow query log size: $SLOW_SIZE bytes"
+                fi
+                
+            else
+                echo "⚠ NOTE: MySQL service is not running - log monitoring will activate when MySQL starts"
             fi
             
             exit 0
