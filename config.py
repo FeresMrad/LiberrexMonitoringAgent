@@ -64,12 +64,27 @@ if not REMOTE_LOG_SERVER:
 To set up MySQL monitoring:
 
 1. Create a dedicated monitoring user in MySQL:
-   mysql -u root -p
-   CREATE USER 'monitoring_user'@'localhost' IDENTIFIED BY 'secure_password';
-   GRANT PROCESS ON *.* TO 'monitoring_user'@'localhost';
-   GRANT SELECT ON performance_schema.* TO 'monitoring_user'@'localhost';
-   FLUSH PRIVILEGES;
+CREATE USER 'monitoring_user'@'localhost' IDENTIFIED BY 'secure_password';
 
+-- 2. Grant core system monitoring privileges
+GRANT PROCESS ON *.* TO 'monitoring_user'@'localhost';
+GRANT REPLICATION CLIENT ON *.* TO 'monitoring_user'@'localhost';
+
+-- 3. Grant access to performance_schema (for detailed performance metrics)
+GRANT SELECT ON performance_schema.* TO 'monitoring_user'@'localhost';
+
+-- 4. Grant access to information_schema (used as default database and for metadata)
+GRANT SELECT ON information_schema.* TO 'monitoring_user'@'localhost';
+
+-- 5. Grant SHOW DATABASES privilege (may be needed for database enumeration)
+GRANT SHOW DATABASES ON *.* TO 'monitoring_user'@'localhost';
+
+-- 6. Grant access to mysql schema for user and privilege information
+GRANT SELECT ON mysql.user TO 'monitoring_user'@'localhost';
+GRANT SELECT ON mysql.db TO 'monitoring_user'@'localhost';
+
+-- 7. Apply all privileges
+FLUSH PRIVILEGES;
 2. Set environment variables in your .env file:
    MYSQL_USER=monitoring_user
    MYSQL_PASSWORD=secure_password

@@ -21,10 +21,10 @@ if [ ! -f ".env" ]; then
     echo "- INFLUXDB_ORG"
     echo "- INFLUXDB_BUCKET"
     echo "- REMOTE_LOG_SERVER"
-    echo "- MYSQL_HOST (for MySQL monitoring)"
-    echo "- MYSQL_PORT (for MySQL monitoring)"
-    echo "- MYSQL_USER (for MySQL monitoring)"
-    echo "- MYSQL_PASSWORD (for MySQL monitoring)"
+    echo "- MYSQL_HOST (required for MySQL monitoring)"
+    echo "- MYSQL_PORT (required for MySQL monitoring)"
+    echo "- MYSQL_USER (required for MySQL monitoring)"
+    echo "- MYSQL_PASSWORD (required for MySQL monitoring)"
     exit 1
 fi
 
@@ -63,20 +63,43 @@ validate_config() {
         exit 1
     fi
     
-    # Check MySQL configuration (credentials always required if you want MySQL monitoring)
-    # The MYSQL_ENABLED flag is now in config.py, so we check if credentials are provided
-    if [ -n "$MYSQL_HOST" ] && [ -n "$MYSQL_PORT" ] && [ -n "$MYSQL_USER" ] && [ -n "$MYSQL_PASSWORD" ]; then
-        echo "✓ MySQL credentials provided - MySQL monitoring will be enabled"
-        MYSQL_CONFIGURED=true
-    else
-        echo "⚠ NOTE: MySQL credentials not provided - MySQL monitoring will be disabled"
-        echo "  To enable MySQL monitoring, add these variables to .env:"
-        echo "  - MYSQL_HOST"
-        echo "  - MYSQL_PORT" 
-        echo "  - MYSQL_USER"
-        echo "  - MYSQL_PASSWORD"
-        MYSQL_CONFIGURED=false
+    # Check MySQL configuration - ALL credentials are now REQUIRED
+    if [ -z "$MYSQL_HOST" ]; then
+        echo "✗ ERROR: MYSQL_HOST is required in .env file"
+        echo "MySQL monitoring is mandatory. Please provide all MySQL credentials."
+        exit 1
     fi
+    
+    if [ -z "$MYSQL_PORT" ]; then
+        echo "✗ ERROR: MYSQL_PORT is required in .env file"
+        echo "MySQL monitoring is mandatory. Please provide all MySQL credentials."
+        exit 1
+    fi
+    
+    if [ -z "$MYSQL_USER" ]; then
+        echo "✗ ERROR: MYSQL_USER is required in .env file"
+        echo "MySQL monitoring is mandatory. Please provide all MySQL credentials."
+        exit 1
+    fi
+    
+    if [ -z "$MYSQL_PASSWORD" ]; then
+        echo "✗ ERROR: MYSQL_PASSWORD is required in .env file"
+        echo "MySQL monitoring is mandatory. Please provide all MySQL credentials."
+        echo ""
+        echo "To set up MySQL monitoring user:"
+        echo "1. Connect to MySQL as root: mysql -u root -p"
+        echo "2. Create monitoring user:"
+        echo "   CREATE USER 'monitoring_user'@'localhost' IDENTIFIED BY 'secure_password';"
+        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'monitoring_user'@'localhost';"
+        echo "   GRANT SELECT ON performance_schema.* TO 'monitoring_user'@'localhost';"
+        echo "   FLUSH PRIVILEGES;"
+        echo "3. Add credentials to .env file:"
+        echo "   MYSQL_USER=monitoring_user"
+        echo "   MYSQL_PASSWORD=secure_password"
+        exit 1
+    fi
+    
+    echo "✓ All required credentials provided - MySQL monitoring will be enabled"
     
     echo "✓ Configuration validation passed"
     return 0
@@ -130,11 +153,10 @@ else
     echo "Generated new agent-id: $AGENT_ID"
 fi
 
-# Test MySQL connection before proceeding (only if MySQL credentials are provided)
-if [ "$MYSQL_CONFIGURED" = "true" ]; then
-    echo ""
-    echo "Testing MySQL connection..."
-    if cd /opt/monitoring-agent && /opt/monitoring-agent/venv/bin/python3 -c "
+# Test MySQL connection (now mandatory since all credentials are required)
+echo ""
+echo "Testing MySQL connection..."
+if cd /opt/monitoring-agent && /opt/monitoring-agent/venv/bin/python3 -c "
 import sys
 from config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE, MYSQL_TIMEOUT
 import mysql.connector
@@ -154,25 +176,22 @@ except Exception as e:
     print(f'MySQL connection failed: {e}')
     sys.exit(1)
 "; then
-        echo "✓ MySQL connection test successful"
-    else
-        echo "✗ ERROR: MySQL connection test failed"
-        echo ""
-        echo "Please verify:"
-        echo "1. MySQL server is running"
-        echo "2. Credentials in .env file are correct"
-        echo "3. Monitoring user exists and has proper permissions:"
-        echo "   mysql -u root -p"
-        echo "   CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY 'your_password';"
-        echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$MYSQL_USER'@'localhost';"
-        echo "   GRANT SELECT ON performance_schema.* TO '$MYSQL_USER'@'localhost';"
-        echo "   FLUSH PRIVILEGES;"
-        exit 1
-    fi
-    cd - > /dev/null
+    echo "✓ MySQL connection test successful"
 else
-    echo "⚠ NOTE: Skipping MySQL connection test (MySQL credentials not provided)"
+    echo "✗ ERROR: MySQL connection test failed"
+    echo ""
+    echo "Please verify:"
+    echo "1. MySQL server is running"
+    echo "2. Credentials in .env file are correct"
+    echo "3. Monitoring user exists and has proper permissions:"
+    echo "   mysql -u root -p"
+    echo "   CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY 'your_password';"
+    echo "   GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$MYSQL_USER'@'localhost';"
+    echo "   GRANT SELECT ON performance_schema.* TO '$MYSQL_USER'@'localhost';"
+    echo "   FLUSH PRIVILEGES;"
+    exit 1
 fi
+cd - > /dev/null
 
 # Create systemd service file
 cat > /etc/systemd/system/monitoring-agent.service << EOL
@@ -190,9 +209,9 @@ Environment=PATH=/opt/monitoring-agent/venv/bin
 WantedBy=multi-user.target
 EOL
 
-# Configure MySQL FIRST (if enabled) since other services may depend on it
+# Configure MySQL FIRST (now mandatory) since other services may depend on it
 MYSQL_SCRIPT="./configure_mysql.sh"
-if [ "$MYSQL_CONFIGURED" = "true" ] && [ -f "$MYSQL_SCRIPT" ]; then
+if [ -f "$MYSQL_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
     echo "CONFIGURING MYSQL (Step 1/5)"
@@ -206,17 +225,14 @@ if [ "$MYSQL_CONFIGURED" = "true" ] && [ -f "$MYSQL_SCRIPT" ]; then
         echo "✓ MySQL configuration completed successfully"
         MYSQL_STATUS="configured"
     else
-        echo "⚠ WARNING: MySQL configuration had issues, but continuing with installation"
-        MYSQL_STATUS="configuration issues"
+        echo "✗ ERROR: MySQL configuration failed"
+        echo "MySQL monitoring is mandatory and configuration failed."
+        exit 1
     fi
 else
-    if [ "$MYSQL_CONFIGURED" = "true" ]; then
-        echo "⚠ NOTE: configure_mysql.sh not found - skipping MySQL optimization"
-        MYSQL_STATUS="script not found"
-    else
-        echo "⚠ NOTE: MySQL credentials not provided - skipping MySQL configuration"
-        MYSQL_STATUS="not configured (no credentials)"
-    fi
+    echo "✗ ERROR: configure_mysql.sh not found"
+    echo "MySQL configuration script is required for mandatory MySQL monitoring."
+    exit 1
 fi
 
 # Configure Apache SECOND (before rsyslog) since rsyslog will forward the modified logs
@@ -330,15 +346,9 @@ if systemctl is-active --quiet monitoring-agent; then
     echo "- System metrics (CPU, Memory, Disk, Network)"
     echo "- SSH authentication events from /var/log/auth.log"
     echo "- Apache access logs from /var/log/apache2/access.log"
-    
-    if [ "$MYSQL_CONFIGURED" = "true" ]; then
-        echo "- MySQL performance and health metrics"
-        echo "- MySQL User: $MYSQL_USER"
-        echo "- Connection: ✓ Verified"
-    else
-        echo "- MySQL monitoring: Disabled (no credentials provided)"
-    fi
-    
+    echo "- MySQL performance and health metrics (ENABLED)"
+    echo "- MySQL User: $MYSQL_USER"
+    echo "- MySQL Connection: ✓ Verified"
     echo "- Server-status requests filtered out"
     echo "- All logs forwarded to $REMOTE_LOG_SERVER without local storage"
     echo "- Queue size limited to 50MB to prevent disk issues"
