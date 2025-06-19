@@ -190,12 +190,41 @@ Environment=PATH=/opt/monitoring-agent/venv/bin
 WantedBy=multi-user.target
 EOL
 
-# Configure Apache FIRST (before rsyslog) since rsyslog will forward the modified logs
+# Configure MySQL FIRST (if enabled) since other services may depend on it
+MYSQL_SCRIPT="./configure_mysql.sh"
+if [ "$MYSQL_CONFIGURED" = "true" ] && [ -f "$MYSQL_SCRIPT" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "CONFIGURING MYSQL (Step 1/5)"
+    echo "================================================================================"
+    
+    # Make sure the script is executable
+    chmod +x "$MYSQL_SCRIPT"
+    
+    # Run the MySQL configuration script
+    if bash "$MYSQL_SCRIPT"; then
+        echo "✓ MySQL configuration completed successfully"
+        MYSQL_STATUS="configured"
+    else
+        echo "⚠ WARNING: MySQL configuration had issues, but continuing with installation"
+        MYSQL_STATUS="configuration issues"
+    fi
+else
+    if [ "$MYSQL_CONFIGURED" = "true" ]; then
+        echo "⚠ NOTE: configure_mysql.sh not found - skipping MySQL optimization"
+        MYSQL_STATUS="script not found"
+    else
+        echo "⚠ NOTE: MySQL credentials not provided - skipping MySQL configuration"
+        MYSQL_STATUS="not configured (no credentials)"
+    fi
+fi
+
+# Configure Apache SECOND (before rsyslog) since rsyslog will forward the modified logs
 APACHE_SCRIPT="./configure_apache.sh"
 if [ -f "$APACHE_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING APACHE (Step 1/4)"
+    echo "CONFIGURING APACHE (Step 2/5)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -219,7 +248,7 @@ RSYSLOG_SCRIPT="./configure_rsyslog.sh"
 if [ -f "$RSYSLOG_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING RSYSLOG (Step 2/4)"
+    echo "CONFIGURING RSYSLOG (Step 3/5)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -250,7 +279,7 @@ FAIL2BAN_SCRIPT="./configure_fail2ban.sh"
 if [ -f "$FAIL2BAN_SCRIPT" ]; then
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/4)"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 4/5)"
     echo "================================================================================"
     
     # Make sure the script is executable
@@ -267,7 +296,7 @@ if [ -f "$FAIL2BAN_SCRIPT" ]; then
 else
     echo ""
     echo "================================================================================"
-    echo "CONFIGURING FAIL2BAN SECURITY (Step 3/4)"
+    echo "CONFIGURING FAIL2BAN SECURITY (Step 4/5)"
     echo "================================================================================"
     echo "⚠ NOTE: configure_fail2ban.sh not found - skipping security configuration"
     echo "To enable security features, place configure_fail2ban.sh in the same directory"
@@ -276,7 +305,7 @@ fi
 
 echo ""
 echo "================================================================================"
-echo "STARTING MONITORING AGENT (Step 4/4)"
+echo "STARTING MONITORING AGENT (Step 5/5)"
 echo "================================================================================"
 
 # Reload systemd to recognize the new service
@@ -324,9 +353,10 @@ if systemctl is-active --quiet monitoring-agent; then
     echo ""
     echo "Services status:"
     echo "- Monitoring Agent: $(systemctl is-active monitoring-agent)"
-    echo "- Fail2ban: $(systemctl is-active fail2ban)"
-    echo "- Rsyslog: $(systemctl is-active rsyslog)"
-    echo "- MySQL: $(systemctl is-active mysql)"
+    echo "- MySQL: $(systemctl is-active mysql) - Status: $MYSQL_STATUS"
+    echo "- Apache: $(systemctl is-active apache2) - Status: $APACHE_STATUS"
+    echo "- Fail2ban: $(systemctl is-active fail2ban) - Status: $FAIL2BAN_STATUS"
+    echo "- Rsyslog: $(systemctl is-active rsyslog) - Status: $RSYSLOG_STATUS"
 else
     echo "ERROR: Monitoring agent failed to start. Check logs with: journalctl -u monitoring-agent"
     exit 1
