@@ -14,7 +14,7 @@ last_mysql_disk_io = None
 last_response_times = None
 
 def get_mysql_process_stats():
-    """Get MySQL process CPU, memory, and disk I/O stats."""
+    """Get MySQL/MariaDB process CPU, memory, and disk I/O stats."""
     mysql_stats = {
         'cpu_percent': 0,
         'memory_percent': 0,
@@ -25,17 +25,33 @@ def get_mysql_process_stats():
     }
     
     try:
-        # Find MySQL processes (common process names)
+        # Find MySQL/MariaDB processes (expanded process names and command line patterns)
         mysql_processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                if proc.info['name'] in ['mysqld', 'mysql'] or \
-                   any('mysql' in arg.lower() for arg in (proc.info['cmdline'] or [])):
+                process_name = proc.info['name'].lower()
+                cmdline = proc.info['cmdline'] or []
+                cmdline_str = ' '.join(cmdline).lower()
+                
+                # Check for MySQL/MariaDB process names
+                if process_name in ['mysqld', 'mysql', 'mariadbd', 'mariadb', 'mysqld_safe', 'mariadb-server']:
                     mysql_processes.append(proc)
+                # Check for MySQL/MariaDB in command line arguments
+                elif any(pattern in cmdline_str for pattern in ['mysql', 'mariadb', 'mysqld', 'mariadbd']):
+                    mysql_processes.append(proc)
+                # Check for common MySQL/MariaDB binary paths
+                elif any(path in cmdline_str for path in ['/usr/sbin/mysqld', '/usr/sbin/mariadbd', '/usr/bin/mysql', '/usr/bin/mariadb']):
+                    mysql_processes.append(proc)
+                    
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         
-        # Aggregate stats from all MySQL processes
+        # If we found processes, log what we detected (for debugging)
+        if mysql_processes:
+            process_names = [proc.info['name'] for proc in mysql_processes]
+            print(f"Detected MySQL/MariaDB processes: {', '.join(set(process_names))}")
+        
+        # Aggregate stats from all MySQL/MariaDB processes
         total_cpu = 0
         total_memory = 0
         total_disk_read = 0
@@ -58,7 +74,7 @@ def get_mysql_process_stats():
                 # Network connections (approximation)
                 connections = proc.connections()
                 for conn in connections:
-                    if hasattr(conn, 'laddr') and conn.laddr and conn.laddr.port == 3306:
+                    if hasattr(conn, 'laddr') and conn.laddr and conn.laddr.port in [3306, 3307]:
                         # This is a rough approximation - actual network bytes would need to be tracked differently
                         pass
                         
@@ -71,7 +87,7 @@ def get_mysql_process_stats():
         mysql_stats['disk_write_bytes'] = total_disk_write
         
     except Exception as e:
-        print(f"Error getting MySQL process stats: {e}")
+        print(f"Error getting MySQL/MariaDB process stats: {e}")
     
     return mysql_stats
 
